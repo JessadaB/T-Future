@@ -1,7 +1,7 @@
 services:
   - type: web
-    name: binance-futures-terminal
-    env: node
+    name: t-future
+    runtime: node
     plan: free
     buildCommand: npm install
     startCommand: npm start
