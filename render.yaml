@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: binance-futures-terminal
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_USERS_FILE
+        value: auth-users.json
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ALERT_TF
+        value: 5m
+      - key: ALERT_MIN_SCORE
+        value: "14"
+      - key: ALERT_SCAN_MS
+        value: "60000"
+      - key: AI_PROVIDER
+        value: none
+      - key: AI_MODE
+        value: alert_only
+      - key: AUTO_TRADE
+        value: "false"

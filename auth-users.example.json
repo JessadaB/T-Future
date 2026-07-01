@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "password": "T01@052541",
+      "enabled": true
+    },
+    {
+      "username": "hashed-admin",
+      "passwordHash": "pbkdf2$sha256$210000$replace-with-generated-salt$replace-with-generated-hash",
+      "enabled": false
+    }
+  ]
+}
