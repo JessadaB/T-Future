@@ -1,0 +1,9 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "password": "T01@052541",
+      "enabled": true
+    }
+  ]
+}
