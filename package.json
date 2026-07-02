@@ -9,9 +9,4 @@
     "start:dry": "DRY_RUN=1 node alert-bot.js",
     "scan:dry": "DRY_RUN=1 node alert-bot.js --once",
     "hash-password": "node scripts/make-password-hash.js",
-    "check": "node --check alert-bot.js && node --check ecosystem.config.cjs && node scripts/check-html.js"
-  },
-  "engines": {
-    "node": ">=18"
-  }
-}
+    "check": "node --check alert-bot.js && node --check ecosyste

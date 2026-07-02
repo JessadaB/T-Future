@@ -3,7 +3,7 @@ services:
     name: t-future
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install && npm run check
     startCommand: npm start
     healthCheckPath: /health
     autoDeploy: true
@@ -25,4 +25,4 @@ services:
       - key: AI_MODE
         value: alert_only
       - key: AUTO_TRADE
-        value: "false"
+      
