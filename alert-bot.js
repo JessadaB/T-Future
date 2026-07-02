@@ -1220,4 +1220,110 @@ function startServer() {
     try {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       req.url = url.pathname;
-      if (req.url === '/health') return json(res, 200, 
+      if (req.url === '/health') return json(res, 200, { ok: !bot.lastError, scanning: bot.scanning, lastError: bot.lastError });
+      if (req.url === '/login' && req.method === 'GET') {
+        const status = await authDbStatus();
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(loginPage(url.searchParams.get('error') || '', status));
+        return;
+      }
+      if (req.url === '/login' && req.method === 'POST') {
+        const form = await readFormBody(req);
+        let user;
+        try {
+          user = await verifyLogin(form.user, form.password);
+        } catch (err) {
+          return redirect(res, '/login?error=' + encodeURIComponent(`Auth database error: ${err.message}`));
+        }
+        if (!user) {
+          return redirect(res, '/login?error=' + encodeURIComponent('Invalid user or password'));
+        }
+        const sid = crypto.randomBytes(32).toString('hex');
+        sessions.set(sid, { user: user.username, createdAt: Date.now() });
+        res.writeHead(302, {
+          location: '/',
+          'set-cookie': `bf_session=${encodeURIComponent(sid)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 24 * 60 * 60}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
+          'cache-control': 'no-store'
+        });
+        res.end();
+        return;
+      }
+      if (!requireAuth(req, res)) return;
+      if (req.url === '/logout') {
+        const sid = parseCookies(req).bf_session;
+        if (sid) sessions.delete(sid);
+        res.writeHead(302, {
+          location: '/login',
+          'set-cookie': 'bf_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+          'cache-control': 'no-store'
+        });
+        res.end();
+        return;
+      }
+      if (req.url === '/' || req.url === '/app' || req.url === '/index.html') return serveIndex(res);
+      if (req.url === '/mobile' || req.url === '/mobile.html') return serveStaticFile(res, 'mobile.html', 'text/html; charset=utf-8');
+      if (req.url === '/status') return json(res, 200, { cfg: CFG, bot: { ...bot, lastSent: undefined } });
+      if (req.url === '/api/session') return json(res, 200, { ok: true, user: getSession(req)?.user || '' });
+      if (req.url === '/api/discord-webhook' && req.method === 'GET') {
+        try {
+          const url = await readWebhook();
+          return json(res, 200, { ok: true, configured: true, masked: `${url.slice(0, 38)}...${url.slice(-6)}` });
+        } catch (err) {
+          return json(res, 200, { ok: true, configured: false, error: err.message });
+        }
+      }
+      if (req.url === '/api/discord-webhook' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const saved = await saveWebhook(body.webhook || body.url || '');
+        return json(res, 200, { ok: true, configured: true, masked: `${saved.slice(0, 38)}...${saved.slice(-6)}` });
+      }
+      if (req.url === '/bot') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(page());
+        return;
+      }
+      if (req.url === '/history.json') {
+        const trades = await readPaperTrades(500);
+        return json(res, 200, { stats: historyStats(trades), trades });
+      }
+      if (req.url === '/history') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(await historyPage());
+        return;
+      }
+      if (req.url === '/scan' && req.method === 'POST') {
+        scanOnce(true).catch(err => console.error('[manual scan]', err));
+        return json(res, 202, { ok: true, scanning: true });
+      }
+      json(res, 404, { ok: false, error: 'not found' });
+    } catch (err) {
+      json(res, 500, { ok: false, error: err.message });
+    }
+  });
+  server.listen(CFG.port, '0.0.0.0', () => {
+    console.log(`Alert status server: http://localhost:${CFG.port}`);
+  });
+}
+
+async function main() {
+  await readState();
+  try {
+    if (!CFG.dryRun) await readWebhook();
+  } catch (err) {
+    bot.lastError = err.message;
+    console.error(err.message);
+  }
+  if (CFG.once) {
+    await scanOnce(true);
+    return;
+  }
+  bot.running = true;
+  startServer();
+  scanOnce(false).catch(err => console.error('[scan]', err));
+  setInterval(() => scanOnce(false).catch(err => console.error('[scan]', err)), CFG.scanMs);
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exitCode = 1;
+});
