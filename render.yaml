@@ -25,4 +25,4 @@ services:
       - key: AI_MODE
         value: alert_only
       - key: AUTO_TRADE
-      
+        value: "false"
