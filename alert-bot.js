@@ -594,6 +594,98 @@ function hitLine(hit) {
   return `${hit.type.padEnd(5)} ${hit.sym.padEnd(14)} ${fP(hit.price).padStart(12)} ${String(hit.score + '/20').padEnd(6)} ${hit.strength.padEnd(11)} [${hit.cat}]${timing}${ai}`;
 }
 
+function scoreBar(score, total = 20) {
+  const n = Math.max(0, Math.min(10, Math.round((Number(score || 0) / total) * 10)));
+  return '█'.repeat(n) + '░'.repeat(10 - n);
+}
+
+function pctText(hit) {
+  const drift = Number(hit.timing?.fast?.directionalMovePct);
+  if (Number.isFinite(drift) && drift !== 0) return `${drift >= 0 ? '+' : ''}${drift.toFixed(2)}%`;
+  const start = Number(hit.timing?.fast?.startPrice || hit.price);
+  const price = Number(hit.price);
+  if (!start || !price) return '-';
+  const pct = ((price - start) / start) * 100;
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+}
+
+function levelText(hit, key, fallback = '-') {
+  const value = Number(hit.ai?.[key]);
+  return Number.isFinite(value) && value > 0 ? fP(value) : fallback;
+}
+
+function fallbackSignalLevels(hit) {
+  const entry = Number(hit.ai?.entry || hit.price || 0);
+  const atr = Number(hit.atr || 0);
+  if (!entry || !atr) return { entry, stop_loss: 0, take_profit_1: 0, take_profit_2: 0, take_profit_3: 0 };
+  const risk = Math.max(atr * 1.2, entry * 0.006);
+  const dir = hit.type === 'LONG' ? 1 : -1;
+  return {
+    entry,
+    stop_loss: entry - dir * risk,
+    take_profit_1: entry + dir * risk * 1.5,
+    take_profit_2: entry + dir * risk * 3,
+    take_profit_3: entry + dir * risk * 5
+  };
+}
+
+function resolvedLevel(hit, key) {
+  const aiValue = Number(hit.ai?.[key]);
+  if (Number.isFinite(aiValue) && aiValue > 0) return aiValue;
+  return fallbackSignalLevels(hit)[key];
+}
+
+function levelTextResolved(hit, key, fallback = '-') {
+  const value = resolvedLevel(hit, key);
+  return Number.isFinite(value) && value > 0 ? fP(value) : fallback;
+}
+
+function takeProfitText(hit) {
+  return [
+    levelTextResolved(hit, 'take_profit_1'),
+    levelTextResolved(hit, 'take_profit_2'),
+    levelTextResolved(hit, 'take_profit_3')
+  ].join(' / ');
+}
+
+function buildSignalEmbed(hit) {
+  const isLong = hit.type === 'LONG';
+  const color = isLong ? 0x16f24a : 0xff4d5e;
+  const arrow = isLong ? '🟢 LONG' : '🔴 SHORT';
+  const trendIcon = isLong ? '↗' : '↘';
+  const aiScore = hit.ai?.confidence ? `${hit.ai.confidence}/10` : hit.ai?.skipped ? 'Rule only' : '-';
+  const flow = hit.timing?.fast
+    ? `${(hit.timing.fast.buyRatio * 100).toFixed(0)}% buy / ${(hit.timing.fast.sellRatio * 100).toFixed(0)}% sell`
+    : '-';
+  const reasons = [
+    hit.ai?.reason,
+    hit.ai?.risk_notes,
+    ...(hit.timing?.guardReasons || [])
+  ].filter(Boolean).join(' | ').slice(0, 900);
+
+  return {
+    color,
+    author: { name: 'T - FUTURE AI BOT', icon_url: 'https://dummyimage.com/128x128/07110b/20ff4d.png&text=T' },
+    title: `${arrow} · ${hit.sym}`,
+    description: [
+      `**Price** \`${fP(hit.price)}\`  **${trendIcon} ${pctText(hit)}**`,
+      `**AI Score** \`${scoreBar(hit.score)}\` **${hit.score}/20**`,
+      `**Strength** \`${hit.strength} [${hit.cat}]\``
+    ].join('\n'),
+    fields: [
+      { name: 'Timeframe', value: CFG.tf, inline: true },
+      { name: 'AI Confirm', value: aiScore, inline: true },
+      { name: 'Flow', value: flow, inline: true },
+      { name: 'Entry', value: `\`${levelTextResolved(hit, 'entry', fP(hit.price))}\``, inline: true },
+      { name: 'Stop Loss', value: `\`${levelTextResolved(hit, 'stop_loss')}\``, inline: true },
+      { name: 'Take Profit', value: `\`${takeProfitText(hit)}\``, inline: true },
+      { name: 'Indicators', value: activeIndicators(hit).slice(0, 900) || '-', inline: false }
+    ],
+    footer: { text: `T-Future Alert • ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Bangkok' })} Asia/Bangkok` },
+    timestamp: new Date().toISOString()
+  };
+}
+
 function aiEnabled() {
   return CFG.aiProvider === 'openai' && !!process.env.OPENAI_API_KEY && CFG.aiMode !== 'off' && CFG.aiMode !== 'none';
 }
@@ -778,7 +870,7 @@ function historyStats(trades) {
 function buildDiscordMessage(hits, sendable) {
   const lines = sendable.slice(0, 20).map(hitLine);
   return [
-    'DISCORD QUERY ALERT - ALL COINS / ALL CHAINS',
+    'T-FUTURE AI SCAN - ALL COINS / ALL CHAINS',
     `TF: ${CFG.tf} | Min score: ${CFG.minScore}/20 | Found: ${hits.length} | Sent: ${sendable.length}`,
     `Time: ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Bangkok' })} Asia/Bangkok`,
     '',
@@ -786,17 +878,34 @@ function buildDiscordMessage(hits, sendable) {
   ].join('\n');
 }
 
-async function sendDiscord(msg) {
+function buildDiscordPayload(hits, sendable, msg) {
+  const embeds = sendable.slice(0, 10).map(buildSignalEmbed);
+  const best = sendable[0];
+  return {
+    username: 'T - FUTURE AI BOT',
+    avatar_url: 'https://dummyimage.com/128x128/07110b/20ff4d.png&text=T',
+    content: [
+      `# T-Future AI Scan 24/7`,
+      `Real-time Alerts • Long & Short • High Probability Setups`,
+      `Found **${hits.length}** setup(s), sending **${sendable.length}** alert(s) · TF **${CFG.tf}** · Min **${CFG.minScore}/20**`,
+      best ? `Top setup: **${best.type} ${best.sym}** at **${fP(best.price)}** (${best.score}/20)` : ''
+    ].filter(Boolean).join('\n'),
+    embeds
+  };
+}
+
+async function sendDiscord(msg, hits = [], sendable = []) {
   if (CFG.dryRun) {
     console.log('\n[DRY_RUN] Discord message:\n' + msg + '\n');
+    console.log('[DRY_RUN] Discord embeds:\n' + JSON.stringify(buildDiscordPayload(hits, sendable, msg), null, 2) + '\n');
     return;
   }
   const webhook = await readWebhook();
-  const content = '```text\n' + msg.slice(0, 1800) + '\n```';
+  const payload = buildDiscordPayload(hits, sendable, msg);
   await fetchJson(webhook, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username: 'Binance Futures Alert', content })
+    body: JSON.stringify(payload)
   });
 }
 
@@ -858,7 +967,7 @@ async function scanOnce(manual = false) {
     if (sendable.length) {
       for (const hit of sendable) await appendPaperTrade(hit);
       const msg = buildDiscordMessage(hits, sendable);
-      await sendDiscord(msg);
+      await sendDiscord(msg, hits, sendable);
       bot.lastMessage = msg;
       bot.totalAlerts += sendable.length;
       await writeState();
@@ -1111,110 +1220,4 @@ function startServer() {
     try {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       req.url = url.pathname;
-      if (req.url === '/health') return json(res, 200, { ok: !bot.lastError, scanning: bot.scanning, lastError: bot.lastError });
-      if (req.url === '/login' && req.method === 'GET') {
-        const status = await authDbStatus();
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(loginPage(url.searchParams.get('error') || '', status));
-        return;
-      }
-      if (req.url === '/login' && req.method === 'POST') {
-        const form = await readFormBody(req);
-        let user;
-        try {
-          user = await verifyLogin(form.user, form.password);
-        } catch (err) {
-          return redirect(res, '/login?error=' + encodeURIComponent(`Auth database error: ${err.message}`));
-        }
-        if (!user) {
-          return redirect(res, '/login?error=' + encodeURIComponent('Invalid user or password'));
-        }
-        const sid = crypto.randomBytes(32).toString('hex');
-        sessions.set(sid, { user: user.username, createdAt: Date.now() });
-        res.writeHead(302, {
-          location: '/',
-          'set-cookie': `bf_session=${encodeURIComponent(sid)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 24 * 60 * 60}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
-          'cache-control': 'no-store'
-        });
-        res.end();
-        return;
-      }
-      if (!requireAuth(req, res)) return;
-      if (req.url === '/logout') {
-        const sid = parseCookies(req).bf_session;
-        if (sid) sessions.delete(sid);
-        res.writeHead(302, {
-          location: '/login',
-          'set-cookie': 'bf_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
-          'cache-control': 'no-store'
-        });
-        res.end();
-        return;
-      }
-      if (req.url === '/' || req.url === '/app' || req.url === '/index.html') return serveIndex(res);
-      if (req.url === '/mobile' || req.url === '/mobile.html') return serveStaticFile(res, 'mobile.html', 'text/html; charset=utf-8');
-      if (req.url === '/status') return json(res, 200, { cfg: CFG, bot: { ...bot, lastSent: undefined } });
-      if (req.url === '/api/session') return json(res, 200, { ok: true, user: getSession(req)?.user || '' });
-      if (req.url === '/api/discord-webhook' && req.method === 'GET') {
-        try {
-          const url = await readWebhook();
-          return json(res, 200, { ok: true, configured: true, masked: `${url.slice(0, 38)}...${url.slice(-6)}` });
-        } catch (err) {
-          return json(res, 200, { ok: true, configured: false, error: err.message });
-        }
-      }
-      if (req.url === '/api/discord-webhook' && req.method === 'POST') {
-        const body = await readJsonBody(req);
-        const saved = await saveWebhook(body.webhook || body.url || '');
-        return json(res, 200, { ok: true, configured: true, masked: `${saved.slice(0, 38)}...${saved.slice(-6)}` });
-      }
-      if (req.url === '/bot') {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(page());
-        return;
-      }
-      if (req.url === '/history.json') {
-        const trades = await readPaperTrades(500);
-        return json(res, 200, { stats: historyStats(trades), trades });
-      }
-      if (req.url === '/history') {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(await historyPage());
-        return;
-      }
-      if (req.url === '/scan' && req.method === 'POST') {
-        scanOnce(true).catch(err => console.error('[manual scan]', err));
-        return json(res, 202, { ok: true, scanning: true });
-      }
-      json(res, 404, { ok: false, error: 'not found' });
-    } catch (err) {
-      json(res, 500, { ok: false, error: err.message });
-    }
-  });
-  server.listen(CFG.port, '0.0.0.0', () => {
-    console.log(`Alert status server: http://localhost:${CFG.port}`);
-  });
-}
-
-async function main() {
-  await readState();
-  try {
-    if (!CFG.dryRun) await readWebhook();
-  } catch (err) {
-    bot.lastError = err.message;
-    console.error(err.message);
-  }
-  if (CFG.once) {
-    await scanOnce(true);
-    return;
-  }
-  bot.running = true;
-  startServer();
-  scanOnce(false).catch(err => console.error('[scan]', err));
-  setInterval(() => scanOnce(false).catch(err => console.error('[scan]', err)), CFG.scanMs);
-}
-
-main().catch(err => {
-  console.error(err);
-  process.exitCode = 1;
-});
+      if (req.url === '/health') return json(res, 200, 
