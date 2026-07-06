@@ -1231,8 +1231,15 @@ async function loadAccount(){
     document.getElementById('hdr-pos').textContent=S.pos.length;
     renderPos();await loadOrders();await loadHistory();setDot(true);
   }catch(e){
-    document.getElementById('hdr-status').textContent='Error';
-    toast('Account: '+e.message,'err');setDot(false);
+    const msg=String(e.message||e);
+    document.getElementById('hdr-status').textContent='API Error';
+    document.getElementById('hdr-bal').textContent='API ERR';
+    document.getElementById('hdr-pnl').textContent='--';
+    document.getElementById('hdr-pos').textContent='--';
+    const html=`<div class="no-data">Futures API sync failed<br><span style="color:var(--red)">${msg}</span><br><span style="font-size:10px;color:var(--text3)">Check API permission, IP restriction, Futures enabled, and testnet/live mode.</span></div>`;
+    const pos=document.getElementById('pos-list'),ord=document.getElementById('ord-list'),hist=document.getElementById('hist-list');
+    if(pos)pos.innerHTML=html;if(ord)ord.innerHTML=html;if(hist)hist.innerHTML=html;
+    toast('Account: '+msg,'err');setDot(false);
   }
 }
 async function loadOrders(){
