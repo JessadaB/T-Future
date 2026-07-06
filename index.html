@@ -1153,26 +1153,57 @@ async function hmac(sec,msg){
   const sig=await crypto.subtle.sign('HMAC',k,enc.encode(msg));
   return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
+function binanceUrl(path,qs=''){
+  const prefix=`/api/binance${path}`;
+  const join=qs?`&${qs}`:'';
+  return `${prefix}?testnet=${S.testnet?'1':'0'}${join}`;
+}
+function binanceDirectUrl(path,qs=''){
+  const base=S.testnet?'https://demo-fapi.binance.com':'https://fapi.binance.com';
+  return `${base}${path}${qs?`?${qs}`:''}`;
+}
+async function readBinanceResponse(res){
+  const text=await res.text();
+  let d=null;
+  try{d=text?JSON.parse(text):null;}catch(e){throw new Error(text.slice(0,160)||`HTTP ${res.status}`);}
+  if(!res.ok)throw new Error((d&&d.msg)||(d&&d.error)||`HTTP ${res.status}`);
+  if(d&&d.code&&d.code<0)throw new Error(`[${d.code}] ${d.msg}`);
+  return d;
+}
+async function binancePublic(path,params={}){
+  const qs=new URLSearchParams(params).toString();
+  try{
+    return await readBinanceResponse(await fetch(binanceUrl(path,qs),{cache:'no-store'}));
+  }catch(e){
+    if(!String(e.message).includes('451'))throw e;
+    return await readBinanceResponse(await fetch(binanceDirectUrl(path,qs),{cache:'no-store'}));
+  }
+}
 async function api(method,path,params={}){
   params.timestamp=Date.now();params.recvWindow=5000;
   const qs=new URLSearchParams(params).toString();
   const sig=await hmac(S.secretKey,qs);
-  const base=S.testnet?'https://demo-fapi.binance.com':'https://fapi.binance.com';
   const h={'X-MBX-APIKEY':S.apiKey};
   let res;
-  if(method==='GET'||method==='DELETE')
-    res=await fetch(`${base}${path}?${qs}&signature=${sig}`,{method,headers:h});
-  else
-    res=await fetch(`${base}${path}`,{method,headers:{...h,'Content-Type':'application/x-www-form-urlencoded'},body:`${qs}&signature=${sig}`});
-  const d=await res.json();
-  if(d.code&&d.code<0)throw new Error(`[${d.code}] ${d.msg}`);
-  return d;
+  const signed=`${qs}&signature=${sig}`;
+  try{
+    if(method==='GET'||method==='DELETE')
+      res=await fetch(binanceUrl(path,signed),{method,headers:h,cache:'no-store'});
+    else
+      res=await fetch(binanceUrl(path),{method,headers:{...h,'Content-Type':'application/x-www-form-urlencoded'},body:signed});
+    return await readBinanceResponse(res);
+  }catch(e){
+    if(!String(e.message).includes('451'))throw e;
+    if(method==='GET'||method==='DELETE')
+      res=await fetch(binanceDirectUrl(path,signed),{method,headers:h,cache:'no-store'});
+    else
+      res=await fetch(binanceDirectUrl(path),{method,headers:{...h,'Content-Type':'application/x-www-form-urlencoded'},body:signed});
+    return await readBinanceResponse(res);
+  }
 }
 async function loadExchangeInfo(){
-  const base=S.testnet?'https://testnet.binancefuture.com':'https://fapi.binance.com';
   try{
-    const r=await fetch(`${base}/fapi/v1/exchangeInfo`);
-    const d=await r.json();
+    const d=await binancePublic('/fapi/v1/exchangeInfo');
     (d.symbols||[]).forEach(s=>{
       const pf=s.filters.find(f=>f.filterType==='PRICE_FILTER')||{};
       const lf=s.filters.find(f=>f.filterType==='LOT_SIZE')||{};
@@ -2029,17 +2060,15 @@ function connectWS(){
   ws2.onmessage=handleKline;
 }
 async function fetchCandles(tf){
-  const base=S.testnet?'https://testnet.binancefuture.com':'https://fapi.binance.com';
   try{
-    const r=await fetch(`${base}/fapi/v1/klines?symbol=${S.coin.sym}&interval=${tf}&limit=80`);
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();if(!Array.isArray(d))throw new Error('Bad data');
+    const d=await binancePublic('/fapi/v1/klines',{symbol:S.coin.sym,interval:tf,limit:80});
+    if(!Array.isArray(d))throw new Error('Bad data');
     S.candles=d.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
     document.getElementById('chart-loader').style.display='none';
     const sig=detectSignal(S.candles);renderSignal(sig);runAll();
   }catch(e){
     document.getElementById('chart-loader').textContent=
-      e.message.includes('Failed')?'⚠ CORS — run via python3 -m http.server 8080':'⚠ '+e.message;
+      e.message.includes('451')?'⚠ Binance restricted this server IP (451)':'⚠ '+e.message;
   }
 }
 function setDot(on){
@@ -2303,10 +2332,8 @@ function updateAutoStatus(){
   el.className='astatus '+(rem>0?'':'al');
 }
 async function fetchAutoCandles(coin,tf){
-  const base=S.testnet?'https://testnet.binancefuture.com':'https://fapi.binance.com';
-  const r=await fetch(`${base}/fapi/v1/klines?symbol=${coin.sym}&interval=${tf}&limit=80`);
-  if(!r.ok)throw new Error(`${coin.sym} HTTP ${r.status}`);
-  const d=await r.json();if(!Array.isArray(d))throw new Error(`${coin.sym} bad data`);
+  const d=await binancePublic('/fapi/v1/klines',{symbol:coin.sym,interval:tf,limit:80});
+  if(!Array.isArray(d))throw new Error(`${coin.sym} bad data`);
   return d.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
 }
 function activeAutoSymbol(sym){

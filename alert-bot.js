@@ -235,6 +235,7 @@ async function fetchJson(url, opts) {
   const res = await fetch(url, opts);
   const text = await res.text();
   if (!res.ok) throw new Error(`${res.status} ${text.slice(0, 160)}`);
+  if (!text.trim()) return null;
   return JSON.parse(text);
 }
 
@@ -1055,6 +1056,30 @@ async function readFormBody(req) {
   return Object.fromEntries(new URLSearchParams(await readBody(req)));
 }
 
+async function proxyBinance(req, res, originalUrl) {
+  const prefix = '/api/binance';
+  const targetPath = originalUrl.pathname.slice(prefix.length);
+  if (!targetPath.startsWith('/fapi/')) return json(res, 400, { ok: false, error: 'invalid binance path' });
+  const qs = new URLSearchParams(originalUrl.searchParams);
+  const testnet = qs.get('testnet') === '1';
+  qs.delete('testnet');
+  const base = testnet ? 'https://demo-fapi.binance.com' : BINANCE;
+  const target = `${base}${targetPath}${qs.toString() ? `?${qs}` : ''}`;
+  const headers = {};
+  const apiKey = req.headers['x-mbx-apikey'];
+  if (apiKey) headers['X-MBX-APIKEY'] = apiKey;
+  if (req.headers['content-type']) headers['content-type'] = req.headers['content-type'];
+  const init = { method: req.method, headers };
+  if (!['GET', 'HEAD'].includes(req.method)) init.body = await readBody(req, 256_000);
+  const upstream = await fetch(target, init);
+  const text = await upstream.text();
+  res.writeHead(upstream.status, {
+    'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+    'cache-control': 'no-store'
+  });
+  res.end(text);
+}
+
 function safeEqual(a, b) {
   const aa = Buffer.from(String(a || ''));
   const bb = Buffer.from(String(b || ''));
@@ -1264,6 +1289,7 @@ function startServer() {
       if (req.url === '/mobile' || req.url === '/mobile.html') return serveStaticFile(res, 'mobile.html', 'text/html; charset=utf-8');
       if (req.url === '/status') return json(res, 200, { cfg: CFG, bot: { ...bot, lastSent: undefined } });
       if (req.url === '/api/session') return json(res, 200, { ok: true, user: getSession(req)?.user || '' });
+      if (req.url.startsWith('/api/binance/')) return proxyBinance(req, res, url);
       if (req.url === '/api/discord-webhook' && req.method === 'GET') {
         try {
           const url = await readWebhook();
